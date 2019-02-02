@@ -1,20 +1,29 @@
-from pytest import approx
+from pytest import approx, mark
 
 import numpy as np
 import inspect
+
+def previous(period):
+	return str(int(period)-1)
 
 class Simulation:
 	def __init__(self):
 		self.functions = {}
 	def use(self, function, when = None):
 		self.functions[function.__name__] = (self.functions.get(function.__name__) or []) + [(function, when)]
+	def offset(self, parameter, period):
+		if parameter.annotation is not parameter.empty:
+			return eval(parameter.annotation, {"previous":previous}, {"period":period})
+		else:
+			return period
 	def calculate(self, variable_name, period, inputs):
 		if variable_name in inputs:
 			return inputs[variable_name][period]
 		if variable_name in self.functions:
 			candidates = [function for (function, when) in self.functions[variable_name] if ((not when) or (when[0] <= period < when[1]))]
 			func = candidates[0]
-			args = {param: self.calculate(param, period, inputs) for param in inspect.signature(func).parameters}
+			parameters = inspect.signature(func).parameters
+			args = {parameter: self.calculate(parameter, self.offset(parameters.get(parameter), period), inputs) for parameter in parameters}
 			return func(**args)
 
 # OpenFisca's core mission is to calculate. If you give it
@@ -59,3 +68,14 @@ def test_calculate_by_period():
 	assert result == approx(np.array([700.0, 1400.0]))
 	result = simulation.calculate("salaire_net", "2016", inputs)
 	assert result == approx(np.array([800.0, 1600.0]))
+
+# Sometimes we want to use values from an earlier period
+
+def test_calculate_by_period():
+	simulation = Simulation()
+	inputs = {"rfr": {"2016": np.array([1000.0, 2000.0])}}
+	def allocation(rfr : "previous(period)"):
+		return rfr * 0.01
+	simulation.use(allocation)
+	result = simulation.calculate("allocation", "2017", inputs)
+	assert result == approx(np.array([10.0, 20.0]))
